@@ -1,6 +1,7 @@
 package ua.procamp.streams.stream;
 
-import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Objects;
 
@@ -12,35 +13,35 @@ import ua.procamp.streams.function.IntUnaryOperator;
 
 public class AsIntStream implements IntStream {
 
-    private List<Integer> elements;
+    private Iterable<Integer> storage;
+    private int size;
 
-    private AsIntStream(List<Integer> elements) {
-        this.elements = elements;
+    private AsIntStream(List<Integer> list) {
+        storage = list;
+        size = list.size();
     }
 
     public static IntStream of(int... values) {
-        List<Integer> elements = new ArrayList<>();
+        List<Integer> result = new LinkedList<>();
         for (int value : values) {
-            elements.add(value);
+            result.add(value);
         }
-        return new AsIntStream(elements);
+        return new AsIntStream(result);
     }
 
     @Override
     public Double average() {
-        verifyStream();
-        int sum = 0;
-        for (Integer element : elements) {
-            sum += element;
-        }
-        return (double) sum / size();
+        Integer sum = sum();
+        return (double) sum / size;
     }
 
     @Override
     public Integer max() {
-        verifyStream();
-        Integer max = elements.get(0);
-        for (Integer element : elements) {
+        verifyStorage(storage);
+        Iterator<Integer> iterator = storage.iterator();
+        Integer max = iterator.next();
+        while (iterator.hasNext()) {
+            Integer element = iterator.next();
             if (element > max) {
                 max = element;
             }
@@ -50,9 +51,11 @@ public class AsIntStream implements IntStream {
 
     @Override
     public Integer min() {
-        verifyStream();
-        Integer min = elements.get(0);
-        for (Integer element : elements) {
+        verifyStorage(storage);
+        Iterator<Integer> iterator = storage.iterator();
+        Integer min = iterator.next();
+        while (iterator.hasNext()) {
+            Integer element = iterator.next();
             if (element < min) {
                 min = element;
             }
@@ -62,14 +65,16 @@ public class AsIntStream implements IntStream {
 
     @Override
     public long count() {
-        return size();
+        return size;
     }
 
     @Override
     public Integer sum() {
-        verifyStream();
-        int sum = 0;
-        for (Integer element : elements) {
+        verifyStorage(storage);
+        Iterator<Integer> iterator = storage.iterator();
+        Integer sum = 0;
+        while (iterator.hasNext()) {
+            Integer element = iterator.next();
             sum += element;
         }
         return sum;
@@ -78,21 +83,26 @@ public class AsIntStream implements IntStream {
     @Override
     public IntStream filter(IntPredicate predicate) {
         Objects.requireNonNull(predicate);
-        for (int i = 0; i < size(); i++) {
-            Integer currentElement = elements.get(i);
-            boolean isFalsePredicate = !predicate.test(currentElement);
-            if (isFalsePredicate) {
-                elements.remove(currentElement);
-                i--;
-            }
-        }
+        storage = filteredStorage(storage, predicate);
         return this;
+    }
+
+    private Iterable<Integer> filteredStorage(Iterable<Integer> storage, IntPredicate predicate) {
+        return () -> {
+            Iterator<Integer> iterator = storage.iterator();
+            while (iterator.hasNext()) {
+                if (!predicate.test(iterator.next())) {
+                    iterator.remove();
+                    size--;
+                }
+            }
+            return storage.iterator();
+        };
     }
 
     @Override
     public void forEach(IntConsumer action) {
-        Objects.requireNonNull(action);
-        for (Integer element : elements) {
+        for (Integer element : storage) {
             action.accept(element);
         }
     }
@@ -100,31 +110,50 @@ public class AsIntStream implements IntStream {
     @Override
     public IntStream map(IntUnaryOperator mapper) {
         Objects.requireNonNull(mapper);
-        for (int i = 0; i < elements.size(); i++) {
-            Integer currentElement = elements.get(i);
-            int resultElement = mapper.apply(currentElement);
-            elements.set(i, resultElement);
-        }
+        storage = mappedStorage(storage, mapper);
         return this;
     }
 
+    private Iterable<Integer> mappedStorage(Iterable<Integer> storage, IntUnaryOperator mapper) {
+        return () -> {
+            Iterator<Integer> iterator = storage.iterator();
+            List<Integer> newStorage = new LinkedList<>();
+            while (iterator.hasNext()) {
+                Integer element = iterator.next();
+                int mappedElement = mapper.apply(element);
+                newStorage.add(mappedElement);
+            }
+            return newStorage.iterator();
+        };
+    }
+
     @Override
-    public IntStream flatMap(IntToIntStreamFunction func) {
-        Objects.requireNonNull(func);
-        List<Integer> result = new ArrayList<>();
-        for (Integer element : elements) {
-            AsIntStream stream = (AsIntStream) func.applyAsIntStream(element);
-            result.addAll(stream.elements);
-        }
-        elements = result;
+    public IntStream flatMap(IntToIntStreamFunction function) {
+        Objects.requireNonNull(function);
+        storage = flatMappedStorage(storage, function);
         return this;
+    }
+
+    private Iterable<Integer> flatMappedStorage(Iterable<Integer> storage, IntToIntStreamFunction function) {
+        return () -> {
+            Iterator<Integer> iterator = storage.iterator();
+            List<Integer> result = new LinkedList<>();
+            while (iterator.hasNext()) {
+                Integer element = iterator.next();
+                AsIntStream stream = (AsIntStream) function.applyAsIntStream(element);
+                List<Integer> streamStorage = (LinkedList<Integer>) stream.storage;
+                result.addAll(streamStorage);
+            }
+            size = result.size();
+            return result.iterator();
+        };
     }
 
     @Override
     public int reduce(int identity, IntBinaryOperator operator) {
         Objects.requireNonNull(operator);
         int result = identity;
-        for (Integer element : elements) {
+        for (Integer element : storage) {
             result = operator.apply(result, element);
         }
         return result;
@@ -132,22 +161,20 @@ public class AsIntStream implements IntStream {
 
     @Override
     public int[] toArray() {
-        int size = size();
+        Iterator<Integer> iterator = storage.iterator();
         int[] result = new int[size];
-        for (int i = 0; i < size; i++) {
-            result[i] = elements.get(i);
+        int index = 0;
+        while (iterator.hasNext()) {
+            Integer element = iterator.next();
+            result[index] = element;
+            index++;
         }
         return result;
     }
 
-    private void verifyStream() {
-        if (size() == 0) {
+    private void verifyStorage(Iterable<Integer> storage) {
+        if (!storage.iterator().hasNext()) {
             throw new IllegalStateException("No elements found to process");
         }
     }
-
-    private int size() {
-        return elements.size();
-    }
-
 }
